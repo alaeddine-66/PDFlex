@@ -9,29 +9,25 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
-from parser.config import DocumentType
-
-
 class GraphState(BaseModel):
     """
     Immutable state flowing through the LangGraph pipeline.
 
     Each node receives this state, creates an enriched copy, and returns it.
-    This follows immutability principles to simplify debugging and replay.
     """
 
-    # --- Input ---
     file_path: Path = Field(..., description="Absolute path to the PDF file")
 
-    # --- Classifier Output ---
-    document_type: Optional[DocumentType] = Field(
-        default=None, description="Detected document type"
+    extracted_text: Optional[str] = Field(
+        default=None, description="Text extracted by the worker"
     )
-    classification_confidence: float = Field(
-        default=0.0, description="Classification confidence [0-1]"
+
+    extracted_metadata: dict[str, Any] = Field(
+        default_factory=dict, description="Metadata (e.g., number of pages, tables, etc.)"
     )
-    classification_metadata: dict[str, Any] = Field(
-        default_factory=dict, description="Raw classification metadata"
+
+    elements: list[Any] = Field(
+            default_factory=list, description="List of parsed elements from the document"
     )
 
     # --- Errors ---

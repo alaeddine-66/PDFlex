@@ -17,14 +17,12 @@ from functools import lru_cache
 load_dotenv()
 
 
-class DocumentType(str, Enum):
-    """Supported PDF document types."""
-    SIMPLE_TEXT = "Simple Text"
-    SCANNED_IMAGE = "Scanned/Image"
-    COMPLEX_TABLES = "Complex Tables"
-    SCIENTIFIC = "Scientific/Formulas"
-    UNKNOWN = "Unknown"
-
+class OCRConfig(BaseModel):
+    """OCR engine configuration."""
+    engine: str = Field(default="tesseract", description="tesseract | vision")
+    language: str = Field(default="fra+eng", description="OCR languages (Tesseract format)")
+    dpi: int = Field(default=150, description="Resolution for image conversion")
+    vision_model: str | None = Field(default=None, description="Vision model for the OCR API")
 
 class LLMConfig(BaseModel):
     """Language model configuration."""
@@ -43,6 +41,7 @@ class PathConfig(BaseModel):
 class AppConfig(BaseModel):
     """Global configuration for the PDFlex application."""
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    ocr: OCRConfig = Field(default_factory=OCRConfig)
     paths: PathConfig = Field(default_factory=PathConfig)
     debug: bool = Field(default=False)
 
@@ -54,6 +53,11 @@ class AppConfig(BaseModel):
                 model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
                 temperature=float(os.getenv("LLM_TEMPERATURE", "0.0")),
                 max_tokens=int(os.getenv("LLM_MAX_TOKENS", "2048")),
+            ),
+            ocr=OCRConfig(
+                engine=os.getenv("OCR_ENGINE", "tesseract"),
+                vision_model=os.getenv("VISION_MODEL") or None,
+                language=os.getenv("OCR_LANGUAGE", "fra+eng"),
             ),
             debug=os.getenv("DEBUG", "false").lower() == "true",
         )
