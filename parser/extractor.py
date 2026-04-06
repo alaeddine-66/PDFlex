@@ -17,6 +17,12 @@ from langchain_core.messages import HumanMessage
 
 from inference.llm_provider_factory import get_llm
 from parser.config import get_config
+from unstructured.partition.pdf import partition_pdf
+from markdownify import markdownify as md
+from loguru import logger
+
+from parser.layout_analyzer import UnstructuredLayoutAnalyzer
+
 
 class BaseExtractor(ABC):
     """
@@ -122,3 +128,96 @@ def get_vision_extractor() -> BaseVisionExtractor:
     if ocr_engine == "vision":
         return LLMVisionExtractor()
     return TesseractExtractor()
+
+
+class UnstructuredExtractor(BaseExtractor):
+    """
+    Comprehensive PDF extractor utilizing Unstructured.io.
+    """
+
+    def __init__(self):
+        """Initializes the layout analyzer, vision extractor, and application config."""
+        self.layout_analyzer = UnstructuredLayoutAnalyzer()
+        self.vision_extractor = get_vision_extractor()
+        self.config = get_config()
+
+    def partition(self, file_path: Path) -> list[Any]:
+        """
+        Partitions a PDF document into structural elements and applies layout sorting.
+
+        Args:
+            file_path (Path): The absolute or relative path to the PDF file.
+
+        Returns:
+            list[Any]: A list of sorted Unstructured elements representing the document.
+        """
+        output_dir = self.config.paths.temp_dir / "temp_images"
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"[UnstructuredExtractor] Partitioning PDF: {file_path.name}")
+        elements = partition_pdf(
+            filename=str(file_path),
+            strategy="fast",
+            extract_image_block_types=["Image", "Formula"],
+            extract_image_block_output_dir=str(output_dir),
+        )
+
+        logger.info(f"[UnstructuredExtractor] {len(elements)} blocks detected. Applying layout sorting...")
+        sorted_elements = self.layout_analyzer.sort_elements(elements)
+
+        return sorted_elements
+
+    def extract(self, elements: list[Any]) -> tuple[str, dict[str, Any]]:
+        """
+        Converts a list of parsed Unstructured elements into a formatted Markdown string.
+
+        Args:
+            elements (list[Any]): The list of sorted Unstructured elements.
+
+        Returns:
+            tuple[str, dict[str, Any]]: A tuple containing the final Markdown string 
+                                        and a metadata dictionary.
+        """
+        final_markdown = []
+        
+        for element in elements:
+            element_type = type(element).__name__
+
+            if element_type in ["Text", "NarrativeText", "Title", "ListItem"]:
+                prefix = "## " if element_type == "Title" else ""
+                final_markdown.append(f"{prefix}{element.text}\n")
+
+            elif element_type == "Table":
+                html_table = getattr(element.metadata, "text_as_html", None)
+                if html_table:
+                    markdown_table = md(html_table)
+                    final_markdown.append(f"{markdown_table}\n")
+                else:
+                    final_markdown.append(f"{element.text}\n")
+
+            elif element_type in ["Image", "Figure", "Formula"]:
+                image_path = getattr(element.metadata, "image_path", None)
+                if image_path and Path(image_path).exists():
+                    try:
+                        with Image.open(image_path) as img:
+                            width, height = img.size
+
+                        # Filter out artifacts: extremely small images or thin layout lines
+                        if (width < 30 and height < 30) or (width / height > 10) or (height / width > 10):
+                            logger.debug(f"[UnstructuredExtractor] Ignored visual artifact (dimensions: {width}x{height})")
+                            continue
+
+                        # Process valid images through the Vision extractor
+                        vision_text = self.vision_extractor.process_single_image(Path(image_path))
+                        final_markdown.append(f"\n> **Image Extraction:**\n> {vision_text}\n")
+                        
+                    except Exception as e:
+                        logger.error(f"[UnstructuredExtractor] AI Vision error on {image_path}: {e}")
+
+        full_text = "\n".join(final_markdown)
+        metadata = {
+            "engine": "unstructured",
+            "blocks_detected": len(elements)
+        }
+
+        return full_text, metadata

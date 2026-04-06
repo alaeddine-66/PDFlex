@@ -11,24 +11,17 @@ from langgraph.graph import StateGraph
 
 from parser.config import AppConfig, get_config
 from parser.state import GraphState
-from parser.extractor import get_vision_extractor
-from unstructured.partition.pdf import partition_pdf
-from markdownify import markdownify as md
+from parser.extractor import UnstructuredExtractor
+from parser.exporter import JSONExporter
 
 def partition_node(state: GraphState):
     logger.info(f"[Partitioner] Partitioning PDF: {state.file_path.name}")
 
-    config = get_config()
-    output_dir = config.paths.temp_dir / "temp_images"
-    output_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        elements = partition_pdf(
-            filename=str(state.file_path),
-            strategy="hi_res",
-            extract_image_block_types=["Image", "Formula"],
-            extract_image_block_output_dir=str(output_dir),
-        )
+
+        extractor = UnstructuredExtractor()
+        elements = extractor.partition(state.file_path)
+
         logger.info(f"[Partitioner] {len(elements)} blocks detected.")
         return state.with_update(elements=elements)
 
@@ -39,36 +32,17 @@ def partition_node(state: GraphState):
 
 def orchestrator_node(state: GraphState) -> GraphState:
     logger.info("[Orchestrator] Processing block by block...")
-    final_markdown = []
-    vision_extractor = get_vision_extractor()
+    try:
 
-    for element in state.elements:
-        element_type = type(element).__name__
+        extractor = UnstructuredExtractor()
+        full_text, metadata = extractor.extract(state.elements)
 
-        if element_type in ["Text", "NarrativeText", "Title", "ListItem"]:
-            prefix = "## " if element_type == "Title" else ""
-            final_markdown.append(f"{prefix}{element.text}\n")
+        return state.with_update(extracted_text=full_text, extracted_metadata=metadata)
 
-        elif element_type == "Table":
-            html_table = getattr(element.metadata, "text_as_html", None)
-            if html_table:
-                markdown_table = md(html_table)
-                final_markdown.append(f"{markdown_table}\n")
-            else:
-                final_markdown.append(f"{element.text}\n")
+    except Exception as e:
+        logger.error(f"[Orchestrator] Error: {e}")
+        return state.with_update(error=str(e))
 
-        elif element_type in ["Image", "Figure", "Formula"]:
-            image_path = getattr(element.metadata, "image_path", None)
-            if image_path and Path(image_path).exists():
-                try:
-                    vision_text = vision_extractor.process_single_image(Path(image_path))
-                    final_markdown.append(f"\n> **Image Extraction:**\n> {vision_text}\n")
-                except Exception as e:
-                    logger.error(f"[Orchestrator] AI Vision error on {image_path}: {e}")
-
-    full_text = "\n".join(final_markdown)
-
-    return state.with_update(extracted_text=full_text)
 
 def build_graph() -> StateGraph:
     """
@@ -114,6 +88,11 @@ class PDFlexPipeline:
 
         initial_state = GraphState(file_path=path)
         final_state = self._graph.invoke(initial_state)
+        final_state = GraphState(**final_state)
+
+        exporter = JSONExporter()
+        output_filename = f"{path.stem}.json"
+        exporter.export(final_state, output_filename)
 
         logger.info("[PDFlex] Pipeline finished")
         return final_state
