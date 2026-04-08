@@ -33,3 +33,23 @@ class JSONExporter(BaseExporter):
             json.dump(state_dict, f, indent=4, ensure_ascii=False)
             
         return out_path
+
+class MarkdownExporter(BaseExporter):
+    """Exports the extracted text from GraphState to a Markdown file."""
+
+    def export(self, state: GraphState, output_filename: str) -> Path:
+        cfg = get_config()
+        output_dir = cfg.paths.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        if not output_filename.endswith(".md"):
+            output_filename = f"{Path(output_filename).stem}.md"
+
+        out_path = output_dir / output_filename
+
+        markdown_content = state.extracted_text or ""
+
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(markdown_content)
+
+        return out_path

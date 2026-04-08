@@ -11,31 +11,15 @@ from langgraph.graph import StateGraph
 
 from parser.config import AppConfig, get_config
 from parser.state import GraphState
-from parser.extractor import UnstructuredExtractor
-from parser.exporter import JSONExporter
+from parser.unstructured_extractor import UnstructuredExtractor
+from parser.exporter import JSONExporter, MarkdownExporter
 
-def partition_node(state: GraphState):
-    logger.info(f"[Partitioner] Partitioning PDF: {state.file_path.name}")
-
-    try:
-
-        extractor = UnstructuredExtractor()
-        elements = extractor.partition(state.file_path)
-
-        logger.info(f"[Partitioner] {len(elements)} blocks detected.")
-        return state.with_update(elements=elements)
-
-    except Exception as e:
-        logger.error(f"[Partitioner] Error: {e}")
-        return state.with_update(error=str(e))
-
-
-def orchestrator_node(state: GraphState) -> GraphState:
+def extract_node(state: GraphState) -> GraphState:
     logger.info("[Orchestrator] Processing block by block...")
     try:
 
         extractor = UnstructuredExtractor()
-        full_text, metadata = extractor.extract(state.elements)
+        full_text, metadata = extractor.extract(state.file_path)
 
         return state.with_update(extracted_text=full_text, extracted_metadata=metadata)
 
@@ -50,11 +34,9 @@ def build_graph() -> StateGraph:
     """
     graph = StateGraph(GraphState)
 
-    graph.add_node("partitioner", partition_node)
-    graph.add_node("orchestrator", orchestrator_node)
+    graph.add_node("extract", extract_node)
 
-    graph.set_entry_point("partitioner")
-    graph.add_edge("partitioner", "orchestrator")
+    graph.set_entry_point("extract")
 
     return graph.compile()
 
@@ -93,6 +75,9 @@ class PDFlexPipeline:
         exporter = JSONExporter()
         output_filename = f"{path.stem}.json"
         exporter.export(final_state, output_filename)
+
+        md_exporter = MarkdownExporter()
+        md_exporter.export(final_state, f"{path.stem}.md")
 
         logger.info("[PDFlex] Pipeline finished")
         return final_state
